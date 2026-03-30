@@ -1,0 +1,73 @@
+using System.Collections.Generic;
+using UnityEngine;
+
+public class OuroborosController : MonoBehaviour
+{
+    [Header("Segments")]
+    public GameObject segmentPrefab;
+    public int initialSegmentCount = 20;
+    public float segmentSpacing = 0.5f;
+
+    [Header("Movement")]
+    public float moveSpeed = 3f;
+    public float turnSpeed = 120f;
+
+    private List<Transform> segments = new();
+    public Transform Head { get; private set; }
+    public Transform Tail  { get; private set; }
+
+    void Start()
+    {
+        SpawnChain();
+    }
+
+    void SpawnChain()
+    {
+        for (int i = 0; i < initialSegmentCount; i++)
+        {
+            Vector3 pos = transform.position - transform.forward * i * segmentSpacing;
+            GameObject seg = Instantiate(segmentPrefab, pos, Quaternion.identity, transform);
+            seg.name = i == 0 ? "Head" : $"Segment_{i:00}";
+            segments.Add(seg.transform);
+        }
+
+        Head = segments[0];
+        Tail = segments[^1];
+
+        Head.gameObject.AddComponent<SnakeHead>().controller = this;
+        Tail.gameObject.AddComponent<SnakeTail>().controller = this;
+    }
+
+    public void AddSegment()
+    {
+        // Insert new segment just before the tail
+        int tailIndex = segments.Count - 1;
+        Vector3 pos = segments[tailIndex].position;
+        GameObject seg = Instantiate(segmentPrefab, pos, Quaternion.identity, transform);
+        seg.name = $"Segment_{tailIndex:00}";
+        segments.Insert(tailIndex, seg.transform);
+    }
+
+    void Update()
+    {
+        MoveChain();
+    }
+
+    void MoveChain()
+    {
+        // Head follows input — see SnakeHead.cs
+        // Each segment follows the one ahead of it (follow-the-leader)
+        for (int i = 1; i < segments.Count; i++)
+        {
+            Transform target = segments[i - 1];
+            Transform seg    = segments[i];
+
+            Vector3 dir = target.position - seg.position;
+            if (dir.magnitude > segmentSpacing)
+            {
+                seg.position += dir.normalized * (dir.magnitude - segmentSpacing);
+                seg.rotation  = Quaternion.LookRotation(dir);
+            }
+        }
+    }
+}
