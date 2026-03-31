@@ -1,0 +1,62 @@
+using UnityEngine;
+
+[RequireComponent(typeof(Renderer))]
+public class SnakeSkinController : MonoBehaviour
+{
+    [Header("Material")]
+    public Renderer snakeRenderer;
+    private Material mat;
+
+    [Header("Iridescence animation")]
+    public float hueShiftSpeed   = 0.05f;
+    public float pulseSpeed      = 1.2f;
+    public float pulseAmplitude  = 0.15f;
+
+    [Header("Scale tiling (grows with snake)")]
+    public Vector2 baseTiling    = new(8f, 20f);
+    public float   tilingPerSeg  = 0.5f;   // adds tiling per body segment added
+
+    // Shader property IDs — cache these, never use string lookups in Update
+    private static readonly int ID_IridescenceIntensity = Shader.PropertyToID("_IridescenceIntensity");
+    private static readonly int ID_BaseHue              = Shader.PropertyToID("_BaseHue");
+    private static readonly int ID_ScaleTiling          = Shader.PropertyToID("_ScaleTiling");
+    private static readonly int ID_NormalTiling         = Shader.PropertyToID("_NormalTiling");
+
+    private float hue      = 0.33f;
+    private float baseIntensity;
+
+    void Start()
+    {
+        if (snakeRenderer == null)
+            snakeRenderer = GetComponent<Renderer>();
+
+        // Instance the material so we don't modify the shared asset
+        mat = snakeRenderer.material;
+        baseIntensity = mat.GetFloat(ID_IridescenceIntensity);
+    }
+
+    void Update()
+    {
+        // Slowly cycle hue across the green→teal→gold range
+        hue = Mathf.Repeat(hue + hueShiftSpeed * Time.deltaTime, 1f);
+        mat.SetFloat(ID_BaseHue, hue);
+
+        // Pulse iridescence intensity — makes the snake look alive
+        float pulse = baseIntensity + Mathf.Sin(Time.time * pulseSpeed) * pulseAmplitude;
+        mat.SetFloat(ID_IridescenceIntensity, pulse);
+    }
+
+    /// Call this from OuroborosController.AddSegment()
+    public void OnSegmentAdded(int totalSegments)
+    {
+        Vector2 tiling = baseTiling + Vector2.up * (totalSegments * tilingPerSeg);
+        mat.SetVector(ID_ScaleTiling,  new Vector4(tiling.x, tiling.y, 0, 0));
+        mat.SetVector(ID_NormalTiling, new Vector4(tiling.x, tiling.y, 0, 0));
+    }
+
+    void OnDestroy()
+    {
+        // Clean up the instanced material
+        if (mat != null) Destroy(mat);
+    }
+}
