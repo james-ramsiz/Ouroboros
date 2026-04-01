@@ -60,3 +60,5 @@ public class SnakeSkinController : MonoBehaviour
         if (mat != null) Destroy(mat);
     }
 }
+Constant(0.0)  →  Metallic port
+Constant(0.75) →  Smoothness port   (override with Fresnel addition above)
