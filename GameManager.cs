@@ -34,3 +34,14 @@ public class GameManager : MonoBehaviour
         Time.timeScale = newState == GameState.Paused ? 0f : 1f;
     }
 }
+Normal Vector(Space: World)
+  └─┐
+View Direction(Space: World)
+  └─┘
+     └─ Dot Product
+          └─ One Minus              ← Fresnel: bright at glancing angles
+               └─ Power(Exp: 3.0)  ← tighten the rim width
+                    └─ Multiply(B: IridescenceIntensity)
+                         └─┐
+                           ├─ Multiply(B: IridescenceColor) → Emission port
+                           └─ Add(B: Smoothness base 0.7)   → Smoothness port
