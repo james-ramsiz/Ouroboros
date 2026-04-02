@@ -1,0 +1,135 @@
+use bevy::prelude::*;
+use crate::components::*;
+
+const SEGMENT_COUNT:    usize = 24;
+const SEGMENT_SPACING:  f32   = 0.55;
+const RING_RADIUS:      f32   = 4.5;
+
+pub struct OuroborosPlugin;
+
+impl Plugin for OuroborosPlugin {
+    fn build(&self, app: &mut App) {
+        app
+            .insert_resource(SegmentPositions::default())
+            .add_systems(Startup, spawn_ouroboros)
+            .add_systems(Update, (
+                drive_head,
+                update_segment_chain,
+            ).chain());  // chain ensures head moves before segments follow
+    }
+}
+
+fn spawn_ouroboros(
+    mut commands:  Commands,
+    mut meshes:    ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut positions: ResMut<SegmentPositions>,
+) {
+    let seg_mesh = meshes.add(Sphere::new(0.3).mesh().ico(3).unwrap());
+
+    for i in 0..SEGMENT_COUNT {
+        let angle = -(i as f32) * (std::f32::consts::TAU / SEGMENT_COUNT as f32);
+        let pos = Vec3::new(
+            angle.cos() * RING_RADIUS,
+            0.3,
+            angle.sin() * RING_RADIUS,
+        );
+        positions.0.push(pos);
+
+        // belly→back gradient: lighter at belly (low index), darker at tail
+        let t = i as f32 / SEGMENT_COUNT as f32;
+        let color = Color::srgb(
+            0.8 - t * 0.7,
+            0.7 - t * 0.4,
+            0.5 - t * 0.45,
+        );
+
+        let scale = 1.0 - t * 0.35; // taper toward tail
+
+        let mut entity = commands.spawn((
+            PbrBundle {
+                mesh: seg_mesh.clone(),
+                material: materials.add(StandardMaterial {
+                    base_color: color,
+                    perceptual_roughness: 0.3,
+                    metallic: 0.0,
+                    ..default()
+                }),
+                transform: Transform::from_translation(pos)
+                    .with_scale(Vec3::splat(scale)),
+                ..default()
+            },
+            BodySegment { index: i, total: SEGMENT_COUNT },
+        ));
+
+        if i == 0 {
+            entity.insert(SnakeHead::default());
+        }
+        if i == SEGMENT_COUNT - 1 {
+            entity.insert(SnakeTail);
+        }
+    }
+}
+
+fn drive_head(
+    time:     Res<Time>,
+    keys:     Res<ButtonInput<KeyCode>>,
+    mut positions: ResMut<SegmentPositions>,
+    mut head_q: Query<(&SnakeHead, &mut Transform)>,
+) {
+    let Ok((head, mut transform)) = head_q.get_single_mut() else { return };
+
+    // Steering
+    let mut yaw = 0.0f32;
+    if keys.pressed(KeyCode::ArrowLeft)  || keys.pressed(KeyCode::KeyA) { yaw  =  1.0; }
+    if keys.pressed(KeyCode::ArrowRight) || keys.pressed(KeyCode::KeyD) { yaw  = -1.0; }
+
+    let mut pitch = 0.0f32;
+    if keys.pressed(KeyCode::KeyQ) { pitch =  1.0; }
+    if keys.pressed(KeyCode::KeyE) { pitch = -1.0; }
+
+    transform.rotate_y(yaw   * head.turn_speed * time.delta_seconds());
+    transform.rotate_local_x(pitch * head.turn_speed * time.delta_seconds());
+
+    // Move forward
+    let forward = transform.forward();
+    transform.translation += forward * head.move_speed * time.delta_seconds();
+
+    // Update head position in chain
+    if let Some(first) = positions.0.first_mut() {
+        *first = transform.translation;
+    }
+}
+
+fn update_segment_chain(
+    mut positions:  ResMut<SegmentPositions>,
+    mut segments_q: Query<(&BodySegment, &mut Transform), Without<SnakeHead>>,
+) {
+    let len = positions.0.len();
+
+    // Follow-the-leader: each segment chases the one ahead
+    for i in 1..len {
+        let target = positions.0[i - 1];
+        let current = positions.0[i];
+        let dir = target - current;
+        if dir.length() > SEGMENT_SPACING {
+            positions.0[i] = target - dir.normalize() * SEGMENT_SPACING;
+        }
+    }
+
+    // Apply positions to transforms
+    for (seg, mut transform) in &mut segments_q {
+        if let Some(&pos) = positions.0.get(seg.index) {
+            transform.translation = pos;
+            // Face the segment ahead
+            if seg.index > 0 {
+                if let Some(&ahead) = positions.0.get(seg.index - 1) {
+                    let dir = ahead - pos;
+                    if dir.length_squared() > 0.001 {
+                        transform.look_to(dir.normalize(), Vec3::Y);
+                    }
+                }
+            }
+        }
+    }
+}
