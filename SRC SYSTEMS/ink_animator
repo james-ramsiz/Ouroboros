@@ -1,0 +1,20 @@
+use bevy::prelude::*;
+use crate::materials::snake_ink::SnakeInkMaterial;
+
+pub fn animate_ink(
+    time:     Res<Time>,
+    mut mats: ResMut<Assets<SnakeInkMaterial>>,
+) {
+    for (_, mat) in mats.iter_mut() {
+        mat.extension.settings.time = time.elapsed_seconds();
+
+        // Subtly breathe the grain over time
+        let t = time.elapsed_seconds();
+        mat.extension.settings.grain_intensity =
+            0.3 + (t * 0.7).sin().abs() * 0.15;
+
+        // Hatch density pulses slightly — makes lines feel hand-drawn
+        mat.extension.settings.hatch_density =
+            27.0 + (t * 0.3).sin() * 1.5;
+    }
+}
