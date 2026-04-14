@@ -1,0 +1,60 @@
+use bevy::{
+    pbr::{ExtendedMaterial, MaterialExtension},
+    prelude::*,
+    render::render_resource::{AsBindGroup, ShaderRef, ShaderType},
+};
+
+// The full material type Bevy uses
+pub type SnakeInkMaterial = ExtendedMaterial<StandardMaterial, SnakeInkExtension>;
+
+#[derive(Asset, AsBindGroup, Reflect, Debug, Clone)]
+pub struct SnakeInkExtension {
+    // Controls exposed to the game at runtime
+    #[uniform(100)]
+    pub settings: SnakeInkSettings,
+}
+
+#[derive(ShaderType, Reflect, Debug, Clone)]
+pub struct SnakeInkSettings {
+    /// How many hatch lines per UV unit (higher = finer hatching)
+    pub hatch_density:    f32,
+    /// Thickness of each hatch line (0.0–1.0)
+    pub hatch_thickness:  f32,
+    /// Second hatch layer rotation (radians, ~1.57 = perpendicular)
+    pub cross_angle:      f32,
+    /// Grain intensity (0.0 = clean, 1.0 = heavy grain)
+    pub grain_intensity:  f32,
+    /// Light threshold below which hatching fills solid black
+    pub black_threshold:  f32,
+    /// Light threshold above which surface goes pure white
+    pub white_threshold:  f32,
+    /// Animation time (driven from SnakeInkController)
+    pub time:             f32,
+    /// Padding to meet WGSL 16-byte alignment
+    pub _pad:             f32,
+}
+
+impl Default for SnakeInkSettings {
+    fn default() -> Self {
+        Self {
+            hatch_density:   28.0,
+            hatch_thickness:  0.04,
+            cross_angle:      1.48,  // ~85 degrees
+            grain_intensity:  0.35,
+            black_threshold:  0.2,
+            white_threshold:  0.75,
+            time:             0.0,
+            _pad:             0.0,
+        }
+    }
+}
+
+impl MaterialExtension for SnakeInkExtension {
+    fn fragment_shader() -> ShaderRef {
+        "shaders/snake_ink.wgsl".into()
+    }
+
+    fn deferred_fragment_shader() -> ShaderRef {
+        "shaders/snake_ink.wgsl".into()
+    }
+}
