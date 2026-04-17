@@ -1,0 +1,77 @@
+import turtle
+import math
+import time
+
+# Set up the screen
+screen = turtle.Screen()
+screen.title("Ouroboros Simulation – The Snake That Eats Its Own Tail")
+screen.bgcolor("black")
+screen.setup(width=800, height=600)
+screen.tracer(0)  # Turn off automatic updates for smooth animation
+
+# Turtle used for drawing everything
+drawer = turtle.Turtle()
+drawer.hideturtle()
+drawer.speed(0)
+
+def draw_ouroboros(phase):
+    drawer.clear()
+    
+    radius = 200
+    cx, cy = 0, 0
+    num_segments = 40
+    segment_angle = 360 / num_segments
+    
+    # Draw the snake's body as moving green segments (the "flow" that never ends)
+    for i in range(num_segments):
+        angle = i * segment_angle + phase
+        x = cx + radius * math.cos(math.radians(angle))
+        y = cy + radius * math.sin(math.radians(angle))
+        drawer.penup()
+        drawer.goto(x, y)
+        drawer.dot(18, "#00cc00")  # thick green body segments (like scales)
+
+    # Head position (slightly ahead – it’s always “biting” the tail ahead of it)
+    head_angle = phase
+    hx = cx + radius * math.cos(math.radians(head_angle))
+    hy = cy + radius * math.sin(math.radians(head_angle))
+    
+    # Red head
+    drawer.goto(hx, hy)
+    drawer.dot(28, "#cc0000")
+    
+    # Eyes (placed on the sides of the head)
+    head_rad = math.radians(head_angle)
+    # Tangent direction (direction the snake is moving around the circle)
+    dx = -math.sin(head_rad)
+    dy = math.cos(head_rad)
+    # Perpendicular vectors for left/right eyes
+    left_x = -dy
+    left_y = dx
+    
+    # Left eye
+    eye1x = hx + dx * 6 + left_x * 8
+    eye1y = hy + dy * 6 + left_y * 8
+    drawer.goto(eye1x, eye1y)
+    drawer.dot(5, "white")
+    
+    # Right eye
+    eye2x = hx + dx * 6 - left_x * 8
+    eye2y = hy + dy * 6 - left_y * 8
+    drawer.goto(eye2x, eye2y)
+    drawer.dot(5, "white")
+
+    # Tail (just behind the head – the part being eaten)
+    tail_angle = phase + 355  # almost full circle, right behind the head
+    tx = cx + radius * math.cos(math.radians(tail_angle))
+    ty = cy + radius * math.sin(math.radians(tail_angle))
+    drawer.goto(tx, ty)
+    drawer.dot(14, "#009900")  # slightly smaller/darker tail tip
+
+# Animation loop – this is the eternal cycle!
+phase = 0
+while True:
+    draw_ouroboros(phase)
+    screen.update()
+    time.sleep(0.025)          # speed of the “swallowing” motion
+    phase += 9                 # how fast the body flows around the circle
