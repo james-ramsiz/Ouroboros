@@ -1,0 +1,10 @@
+/target/
+outputs/
+*.png
+*.toml
+!config/
+.vscode/
+.idea/
+.env
+.DS_Store
+Thumbs.db
