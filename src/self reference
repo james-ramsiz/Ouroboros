@@ -1,0 +1,53 @@
+mod config;
+mod state;
+mod renderer;
+
+use clap::Parser;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+#[derive(Parser)]
+#[command(name = "ouroboros-sim")]
+struct Cli {
+    #[arg(short, long, default_value = "config/default.toml")]
+    config: String,
+    #[arg(short, long, default_value = "outputs")]
+    output_dir: String,
+}
+
+fn main() {
+    let cli = Cli::parse();
+    let cfg = config::load(&cli.config).expect("Failed to load config");
+
+    // Graceful exit for infinite runs
+    let running = Arc::new(AtomicBool::new(true));
+    let r = running.clone();
+    ctrlc::set_handler(move || {
+        r.store(false, Ordering::SeqCst);
+    }).expect("Error setting Ctrl-C handler");
+
+    let mut state = state::SimState::new(&cfg);
+    let mut prev_entropy = 0.5; // Dummy seed metric
+
+    println!("Starting Ouroboros simulation ({}x{})...", cfg.width, cfg.height);
+    while running.load(Ordering::SeqCst) {
+        if let Some(max) = cfg.max_frames {
+            if state.frame_count >= max { break; }
+        }
+
+        let frame = renderer::generate_frame(&mut state);
+        renderer::save_frame(&frame, state.frame_count, &cli.output_dir);
+
+        // Meta feedback loop: compute simple frame entropy → mutate rules
+        let entropy = frame.pixels().map(|p| (p[0] as f32 + p[1] as f32 + p[2] as f32) / 3.0 / 255.0)
+            .sum::<f32>() / (cfg.width as f32 * cfg.height as f32);
+        prev_entropy = prev_entropy * 0.9 + entropy * 0.1; // Exponential moving average
+        state.evolve_rules(&cfg, prev_entropy);
+
+        if state.frame_count % 50 == 0 {
+            println!("Frame {} | mutation={:.3} | phase={:.2} | entropy={:.3}",
+                     state.frame_count, state.mutation_rate, state.color_phase, entropy);
+        }
+    }
+    println!("Simulation stopped at frame {}.", state.frame_count);
+}
