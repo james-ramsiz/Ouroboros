@@ -1,0 +1,46 @@
+mod config; mod state; mod renderer; mod gpu;
+
+use clap::Parser;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+#[derive(Parser)]
+#[command(name = "ouroboros-sim")]
+struct Cli {
+    #[arg(short, long, default_value = "config/default.toml")] config: String,
+    #[arg(short, long, default_value = "outputs")] output_dir: String,
+}
+
+fn main() {
+    let cli = Cli::parse();
+    let cfg = config::load(&cli.config).expect("Failed to load config");
+    
+    let running = Arc::new(AtomicBool::new(true));
+    let r = running.clone();
+    ctrlc::set_handler(move || r.store(false, Ordering::SeqCst)).expect("Ctrl-C handler error");
+
+    // Init headless GPU compute pipeline
+    let gpu = pollster::block_on(gpu::MetricsGpu::new(cfg.width, cfg.height));
+    let mut state = state::SimState::new(&cfg);
+    let mut prev_frame = renderer::generate_frame(&mut state); // Init frame
+
+    println!("🐍 Infinite Ouroboros running ({}x{})... Press Ctrl+C to stop.", cfg.width, cfg.height);
+    while running.load(Ordering::SeqCst) {
+        if let Some(max) = cfg.max_frames { if state.frame_count >= max { break; } }
+
+        let curr_frame = renderer::generate_frame(&mut state);
+        
+        // 🔥 Compute SSIM & Entropy via GPU
+        let (ssim, entropy) = gpu.compute(&prev_frame, &curr_frame);
+        state.evolve_rules(&cfg, ssim, entropy);
+
+        renderer::save_frame(&curr_frame, state.frame_count, &cli.output_dir);
+        prev_frame = curr_frame;
+
+        if state.frame_count % 30 == 0 {
+            println!("Frame {} | SSIM: {:.3} | Ent: {:.3} | μ: {:.4} | φ: {:.2}",
+                     state.frame_count, ssim, entropy, state.mutation_rate, state.color_phase);
+        }
+    }
+    println!("✅ Halted at frame {}", state.frame_count);
+}
