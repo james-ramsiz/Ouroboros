@@ -1,0 +1,5 @@
+[dependencies]
+# ... keep existing deps ...
+wgpu = { version = "22", features = ["spirv"] }
+pollster = "0.3"
+bytemuck = { version = "1.14", features = ["derive"] }
