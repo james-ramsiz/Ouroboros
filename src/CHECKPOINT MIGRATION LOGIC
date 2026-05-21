@@ -1,0 +1,64 @@
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
+use serde::{Serialize, Deserialize};
+use crate::config::SimConfig;
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct Checkpoint {
+    pub frame_count: u64,
+    pub width: u32,
+    pub height: u32,
+    pub mutation_rate: f32,
+    pub color_phase: f32,
+    pub history_ssim: Vec<f32>,
+    pub history_entropy: Vec<f32>,
+    pub hist_head: u32,
+    pub hist_count: u32,
+}
+
+#[derive(Clone)]
+pub enum MigratePolicy {
+    Strict, // Fail if res/history mismatch
+    Adapt,  // Pad/truncate history, warn on res change
+    Reset,  // Clear history, keep logical state
+}
+
+pub fn migrate_checkpoint(cp: &Checkpoint, cfg: &SimConfig, policy: MigratePolicy) -> Self {
+    let target_len = cfg.history.length;
+    let mut hist_ssim = cp.history_ssim.clone();
+    let mut hist_ent = cp.history_entropy.clone();
+
+    match policy {
+        MigratePolicy::Strict => {
+            assert_eq!(cp.width, cfg.general.width, "Resolution mismatch in strict mode");
+            assert_eq!(hist_ssim.len(), target_len, "History length mismatch");
+        }
+        MigratePolicy::Adapt => {
+            if cp.width != cfg.general.width {
+                eprintln!("⚠️ Resolution changed: {}x{} -> {}x{}. History preserved.", cp.width, cp.height, cfg.general.width, cfg.general.height);
+            }
+            while hist_ssim.len() < target_len { hist_ssim.push(0.5); hist_ent.push(0.5); }
+            hist_ssim.truncate(target_len); hist_ent.truncate(target_len);
+        }
+        MigratePolicy::Reset => {
+            hist_ssim = vec![0.5; target_len]; hist_ent = vec![0.5; target_len];
+            eprintln!("🔄 History reset per migration policy.");
+        }
+    }
+
+    Self {
+        rng: SmallRng::seed_from_u64(cfg.seed),
+        mutation_rate: cp.mutation_rate,
+        color_phase: cp.color_phase,
+        frame_count: cp.frame_count,
+        width: cfg.general.width,
+        height: cfg.general.height,
+        history_ssim: hist_ssim,
+        history_entropy: hist_ent,
+        hist_head: cp.hist_head,
+        hist_count: cp.hist_count,
+        history_len: target_len,
+        min_res: cfg.adaptive.min_res, max_res: cfg.adaptive.max_res, res_step: cfg.adaptive.resolution_step,
+        adaptive_enabled: cfg.adaptive.enabled,
+    }
+}
