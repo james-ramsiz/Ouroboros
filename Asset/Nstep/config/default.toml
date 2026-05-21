@@ -1,0 +1,19 @@
+[general]
+width = 1024
+height = 1024
+seed = 42
+max_frames = null  # null = infinite
+
+[rules]
+base_mutation_rate = 0.05
+color_shift_speed = 0.02
+feedback_weight = 0.3
+
+[history]
+length = 32  # N-step memory buffer
+
+[adaptive]
+enabled = true
+min_res = 256
+max_res = 2048
+resolution_step = 64
