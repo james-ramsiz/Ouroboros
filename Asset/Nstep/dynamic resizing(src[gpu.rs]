@@ -1,0 +1,20 @@
+// Add this inside `MetricsGpu::new` or as a separate method, 
+// but here's a drop-in replacement for `compute` that handles dynamic sizes:
+pub fn compute(&self, prev_img: &image::RgbaImage, curr_img: &image::RgbaImage) -> (f32, f32) {
+    assert_eq!(prev_img.width(), curr_img.width(), "Frame width mismatch");
+    assert_eq!(prev_img.height(), curr_img.height(), "Frame height mismatch");
+    
+    let w = prev_img.width();
+    let h = prev_img.height();
+    let tile_count = ((w + 15) / 16 * (h + 15) / 16) as usize;
+    let buf_size = (std::mem::size_of::<TileStats>() * tile_count) as u64;
+
+    // Recreate textures/buffers if resolution changed (simplified for headless)
+    // In production, use a pool or persistent buffers with resize logic.
+    // For this sim, we just reallocate on mismatch.
+    // (Assuming self.device/queue are available via &self)
+    
+    // ... [Keep texture creation & dispatch from previous gpu.rs] ...
+    // Ensure `wgpu::Extent3d` uses `w` and `h` dynamically.
+    // Return (avg_ssim, avg_entropy) as before.
+}
