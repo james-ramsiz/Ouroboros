@@ -1,0 +1,74 @@
+mod config; mod state; mod renderer; mod gpu;
+
+use clap::Parser;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::path::Path;
+
+#[derive(Parser)]
+#[command(name = "ouroboros-sim")]
+struct Cli {
+    #[arg(short, long, default_value = "config/default.toml")] config: String,
+    #[arg(short, long, default_value = "outputs")] output_dir: String,
+    #[arg(long, help = "Path to checkpoint JSON to resume")]
+    resume_from: Option<String>,
+}
+
+fn main() {
+    let cli = Cli::parse();
+    let cfg = config::load(&cli.config).expect("Failed to load config");
+    
+    let running = Arc::new(AtomicBool::new(true));
+    let r = running.clone();
+    ctrlc::set_handler(move || r.store(false, Ordering::SeqCst)).expect("Ctrl-C handler error");
+
+    // Load state (checkpoint or fresh)
+    let mut state = if let Some(path) = &cli.resume_from {
+        let data = std::fs::read(path).expect("Failed to read checkpoint");
+        state::SimState::load_checkpoint(&cfg, &data)
+    } else {
+        state::SimState::new(&cfg)
+    };
+
+    // Init GPU (resolution may change, so we pass initial size)
+    let mut gpu = pollster::block_on(gpu::MetricsGpu::new(state.width, state.height));
+    let mut prev_frame = renderer::generate_frame(&mut state);
+
+    println!("🐍 Infinite Ouroboros running ({}x{})... Press Ctrl+C to stop.", state.width, state.height);
+    
+    let checkpoint_interval = 50;
+    let mut last_checkpoint = 0;
+
+    while running.load(Ordering::SeqCst) {
+        if let Some(max) = cfg.general.max_frames { if state.frame_count >= max { break; } }
+
+        // Adaptive resolution change detection -> rebuild GPU resources
+        if prev_frame.width() != state.width || prev_frame.height() != state.height {
+            println!("⚡ Resizing to {}x{}", state.width, state.height);
+            gpu = pollster::block_on(gpu::MetricsGpu::new(state.width, state.height));
+            prev_frame = image::RgbaImage::new(state.width, state.height); // Pad prev frame
+        }
+
+        let curr_frame = renderer::generate_frame(&mut state);
+        let (ssim, entropy) = gpu.compute(&prev_frame, &curr_frame);
+        
+        // N-step memory + adaptive drift
+        state.evolve_rules(ssim, entropy, &cfg);
+        renderer::save_frame(&curr_frame, state.frame_count, &cli.output_dir);
+        prev_frame = curr_frame;
+
+        // Periodic checkpointing
+        if state.frame_count - last_checkpoint >= checkpoint_interval {
+            let cp_path = format!("{}/checkpoint_{}.json", cli.output_dir, state.frame_count);
+            std::fs::write(&cp_path, state.save_checkpoint()).unwrap();
+            last_checkpoint = state.frame_count;
+            println!("💾 Checkpoint saved: {}", cp_path);
+        }
+
+        if state.frame_count % 30 == 0 {
+            println!("Frame {} | SSIM: {:.3} | Ent: {:.3} | μ: {:.4} | φ: {:.2} | Res: {}x{}",
+                     state.frame_count, ssim, entropy, state.mutation_rate, state.color_phase, state.width, state.height);
+        }
+    }
+    println!("✅ Halted at frame {}. Run with --resume-from outputs/checkpoint_{}.json", state.frame_count, last_checkpoint);
+}
