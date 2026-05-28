@@ -1,0 +1,9 @@
+// Inside the loop:
+let curr_frame = renderer::generate_frame(&mut state);
+let (ssim, entropy) = gpu.compute_frame(&prev_frame, &curr_frame);
+
+// Process metrics and update history/rules
+state.process_metrics(ssim, entropy, &cfg);
+
+renderer::save_frame(&curr_frame, state.frame_count, &cli.output_dir);
+prev_frame = curr_frame;
