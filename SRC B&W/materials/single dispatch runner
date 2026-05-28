@@ -1,0 +1,107 @@
+use bytemuck::{Pod, Zeroable};
+use wgpu::util::DeviceExt;
+
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+pub struct GlobalStats {
+    count: u32,
+    sum_prev: f32, sum_curr: f32,
+    sum_prev_sq: f32, sum_curr_sq: f32, sum_prev_curr: f32,
+    entropy_proxy: f32,
+}
+
+pub struct GpuMetrics {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    pipeline: wgpu::ComputePipeline,
+    bg_layout: wgpu::BindGroupLayout,
+    stats_buffer: wgpu::Buffer,
+}
+
+impl GpuMetrics {
+    pub async fn new(width: u32, height: u32) -> Self {
+        // ... [Standard Init] ...
+        let instance = wgpu::Instance::default();
+        let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions::default()).await.unwrap();
+        let (device, queue) = adapter.request_device(&wgpu::DeviceDescriptor::default(), None).await.unwrap();
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: None,
+            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!("../shaders/metrics.wgsl"))),
+        });
+
+        let bg_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None, entries: &[
+                wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false } },
+                wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false } },
+                wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { access: true }, has_dynamic_offset: false, min_binding_size: None } },
+            ],
+        });
+
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor { label: None, layout: None, module: &shader, entry_point: "main", compilation_options: Default::default(), cache: None });
+        let stats_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: std::mem::size_of::<GlobalStats>() as u64, usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false });
+
+        Self { device, queue, pipeline, bg_layout, stats_buffer }
+    }
+
+    pub fn compute_frame(&self, prev_img: &image::RgbaImage, curr_img: &image::RgbaImage) -> (f32, f32) {
+        let w = prev_img.width(); let h = prev_img.height();
+        let tile_w = (w + 15) / 16; let tile_h = (h + 15) / 16;
+
+        // Upload Textures (Same as before)
+        let create_tex = |data: &Vec<u8>| {
+            let tex = self.device.create_texture(&wgpu::TextureDescriptor { size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::Rgba8UnormSrgb, usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST, label: None, view_formats: &[] });
+            self.queue.write_texture(wgpu::ImageCopyTexture { texture: &tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All }, data, wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(w * 4), rows_per_image: Some(h) }, wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 });
+            tex
+        };
+
+        let t_prev = create_tex(&prev_img.to_vec());
+        let t_curr = create_tex(&curr_img.to_vec());
+        let v_prev = t_prev.create_view(&Default::default());
+        let v_curr = t_curr.create_view(&Default::default());
+
+        let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &self.bg_layout, entries: &[
+            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&v_prev) },
+            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&v_curr) },
+            wgpu::BindGroupEntry { binding: 2, resource: self.stats_buffer.as_entire_binding() },
+        ]});
+
+        // 🚀 Single Dispatch
+        let mut enc = self.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = enc.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &bg, &[]);
+            pass.dispatch_workgroups(tile_w, tile_h, 1);
+        }
+        let read_buf = self.device.create_buffer(&wgpu::BufferDescriptor { label: None, size: std::mem::size_of::<GlobalStats>() as u64, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+        enc.copy_buffer_to_buffer(&self.stats_buffer, 0, &read_buf, 0, read_buf.size());
+        self.queue.submit(Some(enc.finish()));
+
+        // Read Results
+        let slice = read_buf.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
+        self.device.poll(wgpu::Maintain::wait()).panic_on_timeout();
+        rx.recv().unwrap().unwrap();
+
+        let data = slice.get_mapped_range();
+        let stats: GlobalStats = *bytemuck::from_bytes(&data);
+        
+        // Finalize SSIM & Entropy on CPU
+        let n = stats.count as f32;
+        if n == 0.0 { return (1.0, 0.0); }
+
+        let m_x = stats.sum_prev / n;
+        let m_y = stats.sum_curr / n;
+        let v_x = (stats.sum_prev_sq / n) - (m_x * m_x);
+        let v_y = (stats.sum_curr_sq / n) - (m_y * m_y);
+        let cov = (stats.sum_prev_curr / n) - (m_x * m_y);
+
+        let c1 = 0.0001; let c2 = 0.0009;
+        let ssim = ((2.0 * m_x * m_y + c1) * (2.0 * cov + c2)) / ((m_x * m_x + m_y * m_y + c1) * (v_x + v_y + c2));
+        let entropy = stats.entropy_proxy / n;
+
+        (ssim.clamp(-1.0, 1.0), entropy)
+    }
+}
