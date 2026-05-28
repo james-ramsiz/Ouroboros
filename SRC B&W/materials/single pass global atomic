@@ -1,0 +1,34 @@
+struct GlobalStats {
+    count: atomic<u32>,
+    sum_prev: atomic<f32>,
+    sum_curr: atomic<f32>,
+    sum_prev_sq: atomic<f32>,
+    sum_curr_sq: atomic<f32>,
+    sum_prev_curr: atomic<f32>,
+    entropy_proxy: atomic<f32>,
+}
+
+@group(0) @binding(0) var prev: texture_2d<f32>;
+@group(0) @binding(1) var curr: texture_2d<f32>;
+@group(0) @binding(2) var<storage, read_write> stats: GlobalStats;
+
+@compute @workgroup_size(16, 16)
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+    let dims = textureDimensions(prev);
+    if gid.x >= dims.x || gid.y >= dims.y { return; }
+
+    let lum_prev = dot(textureLoad(prev, gid.xy, 0).rgb, vec3f(0.299, 0.587, 0.114));
+    let lum_curr = dot(textureLoad(curr, gid.xy, 0).rgb, vec3f(0.299, 0.587, 0.114));
+
+    // 1. Global Atomic Accumulation
+    atomicAdd(&stats.count, 1u);
+    atomicAdd(&stats.sum_prev, lum_prev);
+    atomicAdd(&stats.sum_curr, lum_curr);
+    atomicAdd(&stats.sum_prev_sq, lum_prev * lum_prev);
+    atomicAdd(&stats.sum_curr_sq, lum_curr * lum_curr);
+    atomicAdd(&stats.sum_prev_curr, lum_prev * lum_curr);
+
+    // 2. Entropy Proxy (Simple Variance-based estimate)
+    let diff = abs(lum_curr - lum_prev);
+    atomicAdd(&stats.entropy_proxy, diff);
+}
