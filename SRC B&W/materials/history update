@@ -1,0 +1,36 @@
+impl SimState {
+    // ... existing fields ...
+
+    /// Called after GPU compute. Updates history and drifts rules.
+    pub fn process_metrics(&mut self, ssim: f32, entropy: f32, cfg: &SimConfig) {
+        // 1. Push to history
+        self.history.push_back((ssim, entropy));
+        if self.history.len() > self.history_len {
+            self.history.pop_front();
+        }
+
+        // 2. Weighted Historical Average
+        let (h_ssim, h_entropy) = self.history.iter().enumerate().fold((0.0, 0.0), |(s, e), (i, (ss, en))| {
+            let w = (i as f32 + 1.0) / self.history_len as f32;
+            (s + ss * w, e + en * w)
+        });
+
+        // 3. Adaptive Resolution (as before)
+        if self.adaptive_enabled {
+            if h_ssim > 0.6 && h_entropy < 0.4 {
+                self.width = (self.width + self.res_step).min(self.max_res);
+                self.height = (self.height + self.res_step).min(self.max_res);
+            } else if h_ssim < 0.3 && h_entropy > 0.7 {
+                self.width = (self.width - self.res_step).max(self.min_res);
+                self.height = (self.height - self.res_step).max(self.min_res);
+            }
+        }
+
+        // 4. Rule Mutation
+        let divergence = (1.0 - h_ssim) * 0.02;
+        let damping = (1.0 - h_entropy) * 0.015;
+        self.mutation_rate = (self.mutation_rate + divergence - damping * 0.5).clamp(0.005, 0.25);
+        self.color_phase += cfg.rules.color_shift_speed + damping - divergence * 0.3;
+        self.frame_count += 1;
+    }
+}
